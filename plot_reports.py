@@ -27,6 +27,11 @@ from matplotlib import font_manager
 from matplotlib.font_manager import FontProperties
 
 
+CHINESE_LABEL = "位移/mm"
+FORCE_LABEL = "荷载/kN"
+FORCE_SCALE = 1e-3
+
+
 CM_TO_INCH = 1 / 2.54
 FIGURE_SIZE = (8 * CM_TO_INCH, 6 * CM_TO_INCH)
 
@@ -63,7 +68,7 @@ def discover_font(family: str) -> FontProperties | None:
     return FontProperties(fname=font_path)
 
 
-def configure_fonts() -> tuple[FontProperties, FontProperties]:
+def configure_fonts() -> tuple[FontProperties, FontProperties, FontProperties]:
     """Configure Matplotlib defaults and return font properties.
 
     The function attempts to use SimSun for Chinese text and Times New Roman
@@ -98,7 +103,13 @@ def configure_fonts() -> tuple[FontProperties, FontProperties]:
                 *current_sans,
             ]
 
-    return english_font, chinese_font
+    combined_font = FontProperties()
+    families = [english_font.get_name()]
+    if chinese_font.get_name() not in families:
+        families.append(chinese_font.get_name())
+    combined_font.set_family(families)
+
+    return english_font, chinese_font, combined_font
 
 
 def is_data_line(tokens: List[str]) -> bool:
@@ -131,7 +142,7 @@ def load_report(path: Path) -> ReportSeries:
             tokens = line.split()
             if is_data_line(tokens):
                 x_values.append(float(tokens[0]))
-                y_values.append(float(tokens[1]))
+                y_values.append(float(tokens[1]) * FORCE_SCALE)
             else:
                 header.append(line)
                 if len(tokens) >= 2:
@@ -143,24 +154,60 @@ def load_report(path: Path) -> ReportSeries:
     return ReportSeries(name=name, x=x_values, y=y_values, x_label=x_label, y_label=y_label, title=title)
 
 
-def plot_series(series: ReportSeries, output_dir: Path, fonts: tuple[FontProperties, FontProperties]) -> None:
+def contains_chinese(text: str) -> bool:
+    """Return ``True`` when the string contains any Chinese characters."""
+
+    return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+
+def choose_font(
+    english_font: FontProperties, chinese_font: FontProperties, combined_font: FontProperties, text: str
+) -> FontProperties:
+    """Return the appropriate font for the supplied text."""
+
+    if not contains_chinese(text):
+        return english_font
+    if english_font.get_name() == chinese_font.get_name():
+        return english_font
+    return combined_font
+
+
+def plot_series(
+    series: ReportSeries,
+    output_dir: Path,
+    fonts: tuple[FontProperties, FontProperties, FontProperties],
+) -> None:
     """Create an individual plot for a single data series."""
 
-    english_font, chinese_font = fonts
+    english_font, chinese_font, combined_font = fonts
     fig, ax = plt.subplots(figsize=FIGURE_SIZE)
-    ax.plot(series.x, series.y, linewidth=1.2, marker="o", markersize=2.4, label=series.title)
-    ax.set_xlabel(series.x_label, fontproperties=english_font)
-    ax.set_ylabel(series.y_label, fontproperties=english_font)
-    ax.set_title(series.title, fontproperties=english_font, fontsize=10)
+    ax.plot(
+        series.x,
+        series.y,
+        linewidth=1.0,
+        marker="o",
+        markersize=2.0,
+        markerfacecolor="none",
+        markeredgewidth=0.8,
+        label=series.title,
+    )
+    ax.set_xlabel(CHINESE_LABEL, fontproperties=combined_font)
+    ax.set_ylabel(FORCE_LABEL, fontproperties=combined_font)
+    title_text = ax.set_title(series.title, fontsize=10)
+    title_text.set_fontproperties(
+        choose_font(english_font, chinese_font, combined_font, title_text.get_text())
+    )
     ax.grid(True, linewidth=0.4, linestyle="--", alpha=0.5)
 
     for label in ax.get_xticklabels() + ax.get_yticklabels():
         label.set_fontproperties(english_font)
 
-    legend = ax.legend(loc="best", frameon=False, prop=english_font)
+    legend = ax.legend(loc="best", frameon=False)
     if legend is not None:
         for text in legend.get_texts():
-            text.set_fontproperties(chinese_font)
+            text.set_fontproperties(
+                choose_font(english_font, chinese_font, combined_font, text.get_text())
+            )
 
     fig.tight_layout()
     output_path = output_dir / f"{series.safe_name}.svg"
@@ -171,28 +218,41 @@ def plot_series(series: ReportSeries, output_dir: Path, fonts: tuple[FontPropert
 def plot_group(
     series_list: Iterable[ReportSeries],
     output_path: Path,
-    fonts: tuple[FontProperties, FontProperties],
+    fonts: tuple[FontProperties, FontProperties, FontProperties],
     title: str,
 ) -> None:
     """Plot multiple series together for comparison."""
 
-    english_font, chinese_font = fonts
+    english_font, chinese_font, combined_font = fonts
     fig, ax = plt.subplots(figsize=FIGURE_SIZE)
 
     for series in series_list:
         linewidth = 1.4 if "base" in series.name.lower() else 1.0
-        ax.plot(series.x, series.y, label=series.name, linewidth=linewidth)
+        ax.plot(
+            series.x,
+            series.y,
+            label=series.name,
+            linewidth=linewidth,
+            marker="o",
+            markersize=2.0,
+            markerfacecolor="none",
+            markeredgewidth=0.8,
+        )
 
-    reference_series = next(iter(series_list))
-    ax.set_xlabel(reference_series.x_label, fontproperties=english_font)
-    ax.set_ylabel(reference_series.y_label, fontproperties=english_font)
-    ax.set_title(title, fontproperties=english_font, fontsize=10)
+    ax.set_xlabel(CHINESE_LABEL, fontproperties=combined_font)
+    ax.set_ylabel(FORCE_LABEL, fontproperties=combined_font)
+    title_text = ax.set_title(title, fontsize=10)
+    title_text.set_fontproperties(
+        choose_font(english_font, chinese_font, combined_font, title_text.get_text())
+    )
     ax.grid(True, linewidth=0.4, linestyle="--", alpha=0.5)
 
     legend = ax.legend(loc="best", frameon=False)
     if legend is not None:
         for text in legend.get_texts():
-            text.set_fontproperties(chinese_font)
+            text.set_fontproperties(
+                choose_font(english_font, chinese_font, combined_font, text.get_text())
+            )
 
     for label in ax.get_xticklabels() + ax.get_yticklabels():
         label.set_fontproperties(english_font)
